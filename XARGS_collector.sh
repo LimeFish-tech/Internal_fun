@@ -14,11 +14,6 @@ LOGFILE="${LOGFILE:-$WORKDIR/collection.log}"
 
 mkdir -p "$WORKDIR"
 
-# === Функция логирования ===
-log_msg() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') [$1] $2" >> "$LOGFILE"
-}
-
 # === 1. Получить OID обычных таблиц ===
 psql -X -A -q -t -o "$WORKDIR/regular_oids.txt" <<'SQL'
 SELECT pc.oid
@@ -51,7 +46,7 @@ SQL
 collect_regular_one() {
     local oid="$1"
     local err_log
-    err_log=$(mktemp)   # временный файл для захвата ошибок psql
+    err_log=$(mktemp)
 
     psql -X -A -q -t --application_name="$PGAPPNAME" 2>"$err_log" <<SQL
 CREATE TEMP TABLE IF NOT EXISTS _tmp_ins (
@@ -105,9 +100,9 @@ LEFT JOIN LATERAL (
 SQL
 
     if [ -s "$err_log" ]; then
-        log_msg "ERROR" "Ошибка обработки OID ${oid}: $(cat "$err_log")"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [ERROR] Ошибка обработки OID ${oid}: $(cat "$err_log")" >> "$LOGFILE"
     else
-        log_msg "INFO" "Обработан OID ${oid}"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [INFO] Обработан OID ${oid}" >> "$LOGFILE"
     fi
     rm -f "$err_log"
 }
@@ -178,25 +173,26 @@ LEFT JOIN LATERAL (
 SQL
 
     if [ -s "$err_log" ]; then
-        log_msg "ERROR" "Ошибка обработки партиции OID ${oid}: $(cat "$err_log")"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [ERROR] Ошибка обработки партиции OID ${oid}: $(cat "$err_log")" >> "$LOGFILE"
     else
-        log_msg "INFO" "Обработана партиция OID ${oid} (${schema}.${part_name})"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [INFO] Обработана партиция OID ${oid} (${schema}.${part_name})" >> "$LOGFILE"
     fi
     rm -f "$err_log"
 }
 
+# Экспортируем функции и переменные, необходимые в дочерних bash
 export -f collect_regular_one
 export -f collect_partition_one
-export LOGFILE PGAPPNAME   # передаём в дочерние bash
+export LOGFILE PGAPPNAME
 
 # === 5. Параллельный запуск: обычные таблицы ===
-log_msg "START" "Начало сбора обычных таблиц (параллельно: $PARALLEL)"
+echo "$(date '+%Y-%m-%d %H:%M:%S') [START] Начало сбора обычных таблиц (параллельно: $PARALLEL)" >> "$LOGFILE"
 xargs -P "$PARALLEL" -n 1 bash -c 'collect_regular_one "$@"' _ < "$WORKDIR/regular_oids.txt"
-log_msg "FINISH" "Обычные таблицы обработаны"
+echo "$(date '+%Y-%m-%d %H:%M:%S') [FINISH] Обычные таблицы обработаны" >> "$LOGFILE"
 
 # === 6. Параллельный запуск: партиции ===
-log_msg "START" "Начало сбора партиций (параллельно: $PARALLEL)"
+echo "$(date '+%Y-%m-%d %H:%M:%S') [START] Начало сбора партиций (параллельно: $PARALLEL)" >> "$LOGFILE"
 xargs -P "$PARALLEL" -n 1 bash -c 'collect_partition_one "$@"' _ < "$WORKDIR/partition_oids.txt"
-log_msg "FINISH" "Партиции обработаны"
+echo "$(date '+%Y-%m-%d %H:%M:%S') [FINISH] Партиции обработаны" >> "$LOGFILE"
 
-log_msg "END" "Скрипт завершён"
+echo "$(date '+%Y-%m-%d %H:%M:%S') [END] Скрипт завершён" >> "$LOGFILE"
