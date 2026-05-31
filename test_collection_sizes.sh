@@ -1,13 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
-# === Настройки подключения ===
+# === Настройки ===
 export PGHOST="${PGHOST:-localhost}"
 export PGPORT="${PGPORT:-5432}"
 export PGDATABASE="${PGDATABASE:-postgres}"
 export PGUSER="${PGUSER:-gpadmin}"
 export PGPASSWORD="${PGPASSWORD:-}"
-export PGAPPNAME="${PGAPPNAME:-table_size_collector}"
+export PGAPPNAME="${PGAPPNAME:-table_size_collector}"   # psql использует эту переменную автоматически
 PARALLEL="${PARALLEL:-4}"
 WORKDIR="${WORKDIR:-/tmp/table_sizing}"
 mkdir -p "$WORKDIR"
@@ -43,21 +43,23 @@ SQL
 # === 3. Функция сбора для одной обычной таблицы ===
 collect_regular() {
     local oid="$1"
-    psql -X -A -t --application_name="$PGAPPNAME" <<SQL
+    psql -X -A -t <<SQL
+-- Устанавливаем имя приложения для идентификации в pg_stat_activity
+SET application_name = '${PGAPPNAME}';
+
 BEGIN;
 
--- Временная таблица с данными текущего замера
+-- Сохраняем результат замера во временную таблицу (без RETURNING)
 CREATE TEMP TABLE _tmp_ins AS
-SELECT pc.oid AS table_oid,
-       pn.nspname AS schema_name,
-       pc.relname AS table_name,
+SELECT pc.oid           AS table_oid,
+       pn.nspname       AS schema_name,
+       pc.relname       AS table_name,
        gp_execution_segment() AS segment_id,
        pg_total_relation_size(pc.oid) AS total_size_bytes,
-       now() AS collected_date
+       now()            AS collected_date
 FROM gp_dist_random('pg_class') pc
 JOIN pg_namespace pn ON pn.oid = pc.relnamespace
-WHERE pc.oid = ${oid}
-RETURNING *;
+WHERE pc.oid = ${oid};
 
 -- Вставка в историю
 INSERT INTO dbatools.regular_sizes_history
@@ -65,7 +67,7 @@ INSERT INTO dbatools.regular_sizes_history
 SELECT table_oid, schema_name, table_name, segment_id, total_size_bytes, collected_date
 FROM _tmp_ins;
 
--- Вставка дельты, используя предыдущую запись для того же (oid, segment_id)
+-- Вставка дельты, используя последнюю предыдущую запись
 INSERT INTO dbatools.regular_sizes_delta
     (table_oid, schema_name, table_name, segment_id, total_size_bytes,
      collected_date, prev_size_bytes, size_delta, delta_period)
@@ -89,7 +91,9 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) prev ON true;
 
+-- Очистка
 DROP TABLE _tmp_ins;
+
 COMMIT;
 SQL
 }
@@ -101,21 +105,22 @@ collect_partition() {
     local part_name="$3"
     local parent_schema="$4"
     local parent_table="$5"
-    psql -X -A -t --application_name="$PGAPPNAME" <<SQL
+    psql -X -A -t <<SQL
+SET application_name = '${PGAPPNAME}';
+
 BEGIN;
 
 CREATE TEMP TABLE _tmp_ins AS
-SELECT ${oid} AS partition_oid,
-       '${schema}' AS schema_name,
-       '${part_name}' AS partition_name,
-       '${parent_schema}' AS parent_schema,
-       '${parent_table}' AS parent_table,
+SELECT ${oid}::oid        AS partition_oid,
+       '${schema}'         AS schema_name,
+       '${part_name}'      AS partition_name,
+       '${parent_schema}'  AS parent_schema,
+       '${parent_table}'   AS parent_table,
        gp_execution_segment() AS segment_id,
        pg_total_relation_size(pc.oid) AS total_size_bytes,
-       now() AS collected_date
+       now()                AS collected_date
 FROM gp_dist_random('pg_class') pc
-WHERE pc.oid = ${oid}
-RETURNING *;
+WHERE pc.oid = ${oid};
 
 INSERT INTO dbatools.partition_sizes_history
     (partition_oid, schema_name, partition_name,
@@ -151,6 +156,7 @@ LEFT JOIN LATERAL (
 ) prev ON true;
 
 DROP TABLE _tmp_ins;
+
 COMMIT;
 SQL
 }
