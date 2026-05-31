@@ -12,7 +12,7 @@ PARALLEL_JOBS=8
 
 # Временный файл со списком OID таблиц
 TABLE_LIST="tables.txt"
-RESULT_TABLE="public.table_segment_sizes"
+RESULT_TABLE="dbatools.table_segment_sizes"
 
 # 1. Получить список OID пользовательских таблиц (исключая системные схемы)
 psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Atc "
@@ -23,7 +23,6 @@ psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Atc "
       AND n.nspname != 'information_schema'
       AND n.nspname NOT LIKE 'gp\_%'
       AND n.nspname != 'toast'
-      AND c.relkind = 'r';   -- только обычные таблицы; при необходимости добавить 'p' для секционированных
 " > "$TABLE_LIST"
 
 if [[ ! -s "$TABLE_LIST" ]]; then
